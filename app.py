@@ -7,7 +7,7 @@ st.set_page_config(page_title="Cai Lab Inventory", page_icon="🧪", layout="wid
 st.title("🧪 Purdue Cai Lab Chemical Inventory")
 st.write("Welcome to the Cai Lab Chemical Inventory Lookup System!")
 
-# 2. Connect to your Google Sheet (PASTE YOUR EXPORTED CSV LINK HERE)
+# 2. Connect to your Google Sheet
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS3WZrrHHeezIXGFn6n5lyvy99mV6i_D8vp8BNIfHK3kfVZY_7VqydklCnlfSMYeXYWuIO_taypSihh/pub?gid=752284712&single=true&output=csv"
 
 # Robust text cleaning function to eliminate spacing, punctuation, and case discrepancies
@@ -47,7 +47,6 @@ def load_and_calculate_inventory():
         axis=1
     )
     
-    # --- CRITICAL UPGRADE ---
     # Sort by Timestamp so the most recent entry is at the bottom (for fetching the latest name)
     df = df.sort_values('Timestamp')
     
@@ -77,7 +76,15 @@ try:
     search_query = st.text_input("🔍 Search by any keyword (Chemical Name, CAS, Location, Size, etc.):", "")
 
     if search_query:
-        mask = df_inventory.apply(lambda row: row.str.contains(search_query, case=False).any(), axis=1)
+        # Clean the search query too, just in case someone searches "50 g" or "shelf 2" with erratic spaces
+        cleaned_query = clean_text_flexible(search_query)
+        
+        # Match against either the regular text columns OR the completely compressed strings
+        mask = df_inventory.apply(
+            lambda row: row.str.contains(search_query, case=False).any() or 
+                        row.apply(clean_text_flexible).str.contains(cleaned_query, case=False).any(), 
+            axis=1
+        )
         result = df_inventory[mask]
     else:
         result = df_inventory
