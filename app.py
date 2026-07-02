@@ -15,7 +15,6 @@ def clean_text_flexible(text):
     if pd.isna(text):
         return ""
     text = str(text).upper()
-    # Remove all spaces and non-alphanumeric characters
     cleaned = re.sub(r'[^A-Z0-9]', '', text)
     return cleaned
 
@@ -23,48 +22,68 @@ def clean_text_flexible(text):
 def load_and_calculate_inventory():
     df = pd.read_csv(GOOGLE_SHEET_URL)
     
-    # Map Google Form columns to standard English headers
-    # Expected order: Timestamp, Action, Name, CAS, Size, Location, Sub_Location, Quantity
-    df.columns = ['Timestamp', 'Action', 'Name', 'CAS', 'Size', 'Location', 'Sub_Location', 'Quantity']
+    # --- FLEXIBLE COLUMN MAPPING (Anti-structural change) ---
+    # Dynamically find columns by matching keywords instead of strict alignment
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if 'timestamp' in col_lower:
+            col_mapping['Timestamp'] = col
+        elif 'action' in col_lower:
+            col_mapping['Action'] = col
+        elif 'name' in col_lower:
+            col_mapping['Name'] = col
+        elif 'cas' in col_lower:
+            col_mapping['CAS'] = col
+        elif 'size' in col_lower or 'package' in col_lower:
+            col_mapping['Size'] = col
+        elif 'location' in col_lower and 'sub' not in col_lower and 'description' not in col_lower and 'shelf' not in col_lower:
+            col_mapping['Location'] = col
+        elif 'sub' in col_lower or 'shelf' in col_lower or 'bin' in col_lower or 'description' in col_lower:
+            col_mapping['Sub_Location'] = col
+        elif 'qty' in col_lower or 'quantity' in col_lower or 'column 8' in col_lower:
+            # Fallback to map "Column 8" if data filled there
+            if 'Quantity' not in col_mapping or 'column 8' in col_lower:
+                col_mapping['Quantity'] = col
+
+    # Build optimized internal dataframe
+    processed_df = pd.DataFrame()
+    processed_df['Timestamp'] = df[col_mapping.get('Timestamp', df.columns[0])]
+    processed_df['Action'] = df[col_mapping.get('Action', df.columns[1])]
+    processed_df['Name'] = df[col_mapping.get('Name', df.columns[2])]
+    processed_df['CAS'] = df[col_mapping.get('CAS', df.columns[3])]
+    processed_df['Size'] = df[col_mapping.get('Size', df.columns[4])]
+    processed_df['Location'] = df[col_mapping.get('Location', df.columns[5])]
+    processed_df['Sub_Location'] = df[col_mapping.get('Sub_Location', df.columns[6])]
     
-    # Standardize CAS, Size, and Sub_Location for foolproof matching
-    df['Cleaned_CAS'] = df['CAS'].astype(str).str.strip()
-    df['Cleaned_Size'] = df['Size'].apply(clean_text_flexible)
-    df['Cleaned_Sub_Location'] = df['Sub_Location'].apply(clean_text_flexible)
+    # Smart fallback for Quantity: if real Quantity column is empty, check Column 8
+    real_qty_col = col_mapping.get('Quantity', df.columns[7])
+    processed_df['Quantity'] = pd.to_numeric(df[real_qty_col], errors='coerce').fillna(0)
+    if processed_df['Quantity'].sum() == 0 and 'Column 8' in df.columns:
+        processed_df['Quantity'] = pd.to_numeric(df['Column 8'], errors='coerce').fillna(0)
+
+    # Standardize data fields
+    processed_df['Cleaned_CAS'] = processed_df['CAS'].astype(str).str.strip()
+    processed_df['Cleaned_Size'] = processed_df['Size'].apply(clean_text_flexible)
+    processed_df['Cleaned_Sub_Location'] = processed_df['Sub_Location'].apply(clean_text_flexible)
+    processed_df['Full_Location_Standardized'] = processed_df['Location'].astype(str) + " (" + processed_df['Cleaned_Sub_Location'] + ")"
+    processed_df['Name'] = processed_df['Name'].astype(str).str.strip()
     
-    # Create standardized full location
-    df['Full_Location_Standardized'] = df['Location'].astype(str) + " (" + df['Cleaned_Sub_Location'] + ")"
-    
-    # Clean up Chemical Name for display (just strip outer spaces)
-    df['Name'] = df['Name'].astype(str).str.strip()
-    
-    # Ensure Quantity is numeric
-    df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0)
-    
-    # Inventory Math: Convert 'Check-out' quantities into negative numbers
-    df['Adjusted_Qty'] = df.apply(
+    # Inventory calculation logic
+    processed_df['Adjusted_Qty'] = processed_df.apply(
         lambda row: -row['Quantity'] if 'Check-out' in str(row['Action']) else row['Quantity'], 
         axis=1
     )
     
-    # Sort by Timestamp so the most recent entry is at the bottom (for fetching the latest name)
-    df = df.sort_values('Timestamp')
+    processed_df = processed_df.sort_values('Timestamp')
+    qty_series = processed_df.groupby(['Cleaned_CAS', 'Cleaned_Size', 'Full_Location_Standardized'])['Adjusted_Qty'].sum()
+    name_mapping = processed_df.groupby('Cleaned_CAS')['Name'].last()
     
-    # 1. Aggregate quantities grouped ONLY by CAS, Size, and Location (Ignoring Name discrepancies)
-    qty_series = df.groupby(['Cleaned_CAS', 'Cleaned_Size', 'Full_Location_Standardized'])['Adjusted_Qty'].sum()
-    
-    # 2. Fetch the LATEST typed Chemical Name for each unique CAS number to keep display clean
-    name_mapping = df.groupby('Cleaned_CAS')['Name'].last()
-    
-    # 3. Combine them into the final inventory table
     inventory = qty_series.reset_index()
     inventory['Chemical Name'] = inventory['Cleaned_CAS'].map(name_mapping)
     
-    # Rearrange and rename columns for display
     inventory = inventory[['Chemical Name', 'Cleaned_CAS', 'Cleaned_Size', 'Full_Location_Standardized', 'Adjusted_Qty']]
     inventory.columns = ['Chemical Name', 'CAS Number', 'Size', 'Location', 'Quantity Left']
-    
-    # Only display items currently in stock (Quantity > 0)
     inventory = inventory[pd.to_numeric(inventory['Quantity Left']) > 0]
     
     return inventory.astype(str)
@@ -76,10 +95,7 @@ try:
     search_query = st.text_input("🔍 Search by any keyword (Chemical Name, CAS, Location, Size, etc.):", "")
 
     if search_query:
-        # Clean the search query too, just in case someone searches "50 g" or "shelf 2" with erratic spaces
         cleaned_query = clean_text_flexible(search_query)
-        
-        # Match against either the regular text columns OR the completely compressed strings
         mask = df_inventory.apply(
             lambda row: row.str.contains(search_query, case=False).any() or 
                         row.apply(clean_text_flexible).str.contains(cleaned_query, case=False).any(), 
