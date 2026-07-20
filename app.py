@@ -18,11 +18,14 @@ def clean_text_flexible(text):
     cleaned = re.sub(r'[^A-Z0-9]', '', text)
     return cleaned
 
-# Smart function to join Location and Sub-Location elegantly without leaving empty parentheses
+# Smart function to join Location and Sub-Location elegantly
 def combine_location(row):
     loc = str(row['Location']).strip()
     sub_loc = str(row['Cleaned_Sub_Location']).strip()
-    # If sub_location is empty or NaN, just return the main location
+    
+    # 🌟 终极补丁：强行抹去原始数据中可能存在的 " (1)" 或 "(2)" 等尾巴
+    loc = re.sub(r'\s*\(\d+\)$', '', loc)
+    
     if not sub_loc or sub_loc.upper() == 'NAN' or sub_loc == '':
         return loc
     return f"{loc} ({sub_loc})"
@@ -32,7 +35,6 @@ def load_and_calculate_inventory():
     df = pd.read_csv(GOOGLE_SHEET_URL)
     
     # --- FLEXIBLE COLUMN MAPPING (Anti-structural change) ---
-    # Dynamically find columns by matching keywords instead of strict alignment
     col_mapping = {}
     for col in df.columns:
         col_lower = str(col).lower()
@@ -51,7 +53,6 @@ def load_and_calculate_inventory():
         elif 'sub' in col_lower or 'shelf' in col_lower or 'bin' in col_lower or 'description' in col_lower:
             col_mapping['Sub_Location'] = col
         elif 'qty' in col_lower or 'quantity' in col_lower or 'column 8' in col_lower:
-            # Fallback to map "Column 8" if data filled there
             if 'Quantity' not in col_mapping or 'column 8' in col_lower:
                 col_mapping['Quantity'] = col
 
@@ -65,7 +66,7 @@ def load_and_calculate_inventory():
     processed_df['Location'] = df[col_mapping.get('Location', df.columns[5])]
     processed_df['Sub_Location'] = df[col_mapping.get('Sub_Location', df.columns[6])]
     
-    # Smart fallback for Quantity: if real Quantity column is empty, check Column 8
+    # Smart fallback for Quantity
     real_qty_col = col_mapping.get('Quantity', df.columns[7])
     processed_df['Quantity'] = pd.to_numeric(df[real_qty_col], errors='coerce').fillna(0)
     if processed_df['Quantity'].sum() == 0 and 'Column 8' in df.columns:
@@ -76,9 +77,8 @@ def load_and_calculate_inventory():
     processed_df['Cleaned_Size'] = processed_df['Size'].apply(clean_text_flexible)
     processed_df['Cleaned_Sub_Location'] = processed_df['Sub_Location'].apply(clean_text_flexible)
     
-    # Use the optimized function to prevent system-generated trailing parentheses
+    # Use the optimized function to eliminate historical brackets
     processed_df['Full_Location_Standardized'] = processed_df.apply(combine_location, axis=1)
-    
     processed_df['Name'] = processed_df['Name'].astype(str).str.strip()
     
     # Inventory calculation logic
