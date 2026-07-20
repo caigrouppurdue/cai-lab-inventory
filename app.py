@@ -18,18 +18,6 @@ def clean_text_flexible(text):
     cleaned = re.sub(r'[^A-Z0-9]', '', text)
     return cleaned
 
-# Smart function to join Location and Sub-Location elegantly
-def combine_location(row):
-    loc = str(row['Location']).strip()
-    sub_loc = str(row['Cleaned_Sub_Location']).strip()
-    
-    # 🌟 终极补丁：强行抹去原始数据中可能存在的 " (1)" 或 "(2)" 等尾巴
-    loc = re.sub(r'\s*\(\d+\)$', '', loc)
-    
-    if not sub_loc or sub_loc.upper() == 'NAN' or sub_loc == '':
-        return loc
-    return f"{loc} ({sub_loc})"
-
 @st.cache_data(ttl=60) # Auto-refresh data every 60 seconds
 def load_and_calculate_inventory():
     df = pd.read_csv(GOOGLE_SHEET_URL)
@@ -76,9 +64,7 @@ def load_and_calculate_inventory():
     processed_df['Cleaned_CAS'] = processed_df['CAS'].astype(str).str.strip()
     processed_df['Cleaned_Size'] = processed_df['Size'].apply(clean_text_flexible)
     processed_df['Cleaned_Sub_Location'] = processed_df['Sub_Location'].apply(clean_text_flexible)
-    
-    # Use the optimized function to eliminate historical brackets
-    processed_df['Full_Location_Standardized'] = processed_df.apply(combine_location, axis=1)
+    processed_df['Full_Location_Standardized'] = processed_df['Location'].astype(str) + " (" + processed_df['Cleaned_Sub_Location'] + ")"
     processed_df['Name'] = processed_df['Name'].astype(str).str.strip()
     
     # Inventory calculation logic
